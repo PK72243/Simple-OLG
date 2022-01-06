@@ -54,7 +54,7 @@ class model_olg():
 		self.grid_a_spacing=grid_params['grid_a_spacing']
 		self.grid_a_size=int(grid_params['grid_a_size'])
 		self.grid_a=my_lin(self.a_min,self.a_max,self.grid_a_size,self.grid_a_spacing)
-		
+		arg1=[self.grid_a]*self.N_income_levels # For interpolation
 		
 		start=time.time()
 		V=np.zeros((self.grid_a_size,self.N_income_levels))
@@ -67,14 +67,11 @@ class model_olg():
 		self.g_a_approx=dict()		
 				
 		for t in reversed(range(self.T_start,self.T_end+1)):
-			self.V_approx[t]=dict()
-			self.g_c_approx[t]=dict()
-			self.g_a_approx[t]=dict()
-			self.g_l_approx[t]=dict()
-			
-			for y in range(self.N_income_levels):
 
-				for a in range(self.grid_a_size):
+			for a in range(self.grid_a_size):
+				for y in range(self.N_income_levels):
+
+				
 					if t<self.retirement_age:#Working
 						def criter_func(params):
 							c=params[0]
@@ -93,53 +90,67 @@ class model_olg():
 						else:
 							x0=[g_c[a,y],g_l[a,y]]
 						res = minimize(criter_func, x0, method='trust-constr',constraints=[linear_cons],   options={'verbose': 0})
-
-					else:#pension and not working
-						def criter_func(params):
-							c=params[0]
-		
-							V_=0
-							if t<self.T_end:
-								a_=max(self.a_min,min(self.grid_a[a]*(1+self.r)-params[0],self.a_max))
-								for k in range(self.N_income_levels):
-									V_+=self.beta*self.V_approx[t+1][k](a_)*self.Pi[y,k]
-							return -self.model_utility(c, 0)-V_
-						ub=self.grid_a[a]*(1+self.r)
-						linear_cons=LinearConstraint([1],[0],[ub])
-						if t==self.T_end:
-							x0=[max(self.grid_a[a],ub/2)]
-							
-						else:
-							x0=[max(g_c[a,y],ub/2)]
-							
-						if self.grid_a[a]<=0:
-							res=minimize(criter_func,x0)
-							res.fun=99999
-							res.x=[0,0]
-						else:
-
-							res = minimize(criter_func, x0, method='trust-constr',constraints=[linear_cons],   options={'verbose': 0})
-
 						
-					V[a,y]=-res.fun
-					g_c[a,y]=res.x[0]
-					if t<self.retirement_age:
+						V[a,y]=-res.fun
+						g_c[a,y]=res.x[0]
 						g_l[a,y]=res.x[1]
 						g_a[a,y]=self.w*self.income_levels[y]*res.x[1]+self.grid_a[a]*(1+self.r)-res.x[0]
-					else:
-						g_l[a,y]=0
-						g_a[a,y]=self.grid_a[a]*(1+self.r)-res.x[0]
+					
+					else:#pension and not working
+						if y==0:
+						
+							def criter_func(params):
+								c=params[0]
+			
+								V_=0
+								if t<self.T_end:
+									a_=max(self.a_min,min(self.grid_a[a]*(1+self.r)-params[0],self.a_max))
+									for k in range(self.N_income_levels):
+										V_+=self.beta*self.V_approx[t+1][k](a_)*self.Pi[y,k]
+								return -self.model_utility(c, 0)-V_
+							ub=self.grid_a[a]*(1+self.r)
+							linear_cons=LinearConstraint([1],[0],[ub])
+							if t==self.T_end:
+								x0=[max(self.grid_a[a],ub/2)]
+								
+							else:
+								x0=[max(g_c[a,y],ub/2)]
+								
+							if self.grid_a[a]<=0:
+								V[a,y]=-99999
+								g_c[a,y]=0
+								g_l[a,y]=0
+								g_a[a,y]=0
+							else:
 	
-				self.V_approx[t][y]=interpolate.interp1d(self.grid_a,V[:,y])
-				self.g_a_approx[t][y]=interpolate.interp1d(self.grid_a,g_a[:,y])
-				self.g_c_approx[t][y]=interpolate.interp1d(self.grid_a,g_c[:,y])
-				self.g_l_approx[t][y]=interpolate.interp1d(self.grid_a,g_l[:,y])
+								res = minimize(criter_func, x0, method='trust-constr',constraints=[linear_cons],   options={'verbose': 0})			
+								V[a,y]=-res.fun
+								g_c[a,y]=res.x[0]
+								g_l[a,y]=0
+								g_a[a,y]=self.grid_a[a]*(1+self.r)-res.x[0]
+						else:
+							V[a,y]=V[a,0]
+							g_c[a,y]=g_c[a,0]
+							g_l[a,y]=g_l[a,0]
+							g_a[a,y]=g_a[a,0]
+					
+
+
+			
+				
+			self.V_approx[t]=list(map(interpolate.interp1d,arg1,list(V.T)))
+			self.g_a_approx[t]=list(map(interpolate.interp1d,arg1,list(g_a.T)))
+			self.g_c_approx[t]=list(map(interpolate.interp1d,arg1,list(g_c.T)))
+			self.g_l_approx[t]=list(map(interpolate.interp1d,arg1,list(g_l.T)))
+						
 					
 			print(f'Generation {t} solved')
 		print(f'Household problems solved in {round(time.time()-start,2)} seconds')
 		
-	def lifetime_sim(self,n,initial_prob,a_0):
-				
+class lifetime_sim():
+	def __init__(self,model_olg,n,initial_prob,a_0,plot=True):
+		for att, value in model_olg.__dict__.items():
+			   setattr(self, att, value)
 		states=np.empty((n,self.N_periods))
 		states[:,0]=np.random.choice(np.arange(self.N_income_levels),p=initial_prob,size=n)
 		
@@ -152,7 +163,7 @@ class model_olg():
 		c=np.empty((n,self.N_periods))
 		l=np.empty((n,self.N_periods))
 		V=np.empty((n,self.N_periods))
-		a[:,0]=0
+		a[:,0]=a_0
 		
 			
 		for t in range(self.N_periods):
@@ -164,7 +175,22 @@ class model_olg():
 				l[idx_temp,t]=self.g_l_approx[t+self.T_start][s](a_)
 				V[idx_temp,t]=self.V_approx[t+self.T_start][s](a_)
 				
-		return V,a,c,l
+		self.V,self.a,self.c,self.l=V,a,c,l
+		
+		if plot==True:
+			fig, ax =plt.subplots()
+			ax.set_xlabel('Age')
+			#ax.set_ylabel('',color='blue')
+			ax.tick_params(axis='y', labelcolor='blue')
+			ax.plot(np.arange(self.T_start-1,self.T_end+1),np.mean(self.a,axis=0),label='Assets',color='blue',linestyle='dotted',linewidth=0.7)
+			ax.plot(np.arange(self.T_start,self.T_end+1),np.mean(self.c,axis=0),label='Consumption',color='blue',linestyle='--',linewidth=0.7)
+			ax.legend(loc=2)
+			ax2=ax.twinx()
+			#ax2.set_ylabel('',color='red')
+			ax2.plot(np.arange(self.T_start,self.T_end+1),np.mean(self.l,axis=0),label='Labour',color='red',linestyle='--',linewidth=0.7)
+			ax2.tick_params(axis='y', labelcolor='red')
+			ax2.legend(loc=0)
+			plt.show()
 		
 		
 params={'kappa':5.24,'beta':0.988,'v':2,'sigma':1.5,'omega':1,'r':0.04,
@@ -176,4 +202,5 @@ aa=model_olg(params)
 aa.solve_hh(grid_params)
 n=10000
 initial_prob=[0.5,0.5]
-V,a,c,l=aa.lifetime_sim(n, initial_prob, 0)
+bb=lifetime_sim(aa,n, initial_prob, 0)
+
