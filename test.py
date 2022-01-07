@@ -1,5 +1,6 @@
 ###OLG
 import numpy as np
+from numpy import genfromtxt
 from scipy.optimize import LinearConstraint, minimize
 from scipy import interpolate
 import time
@@ -12,7 +13,8 @@ def my_lin(lb, ub, steps, spacing=1):
 
 
 class model_olg():
-	def __init__(self,model_params,wage=1,interest=0.04):
+	def __init__(self,model_params,interest=0.04,w_=1):
+		self.name=model_params['name']
 		self.kappa=float(model_params['kappa'])
 		self.beta=float(model_params['beta'])
 		self.sigma=float(model_params['sigma'])
@@ -21,7 +23,7 @@ class model_olg():
 		self.income_levels=model_params['y_levels']
 		self.N_income_levels=self.Pi.shape[0]
 		
-		self.w=float(wage)
+
 		self.r=float(interest)
 		
 		self.utility_f=model_params['utility_f']
@@ -35,7 +37,20 @@ class model_olg():
 		else:
 			self.retirement_age=self.T_end
 		
-	
+		self.w=np.zeros(101)
+		try:
+			arr_temp=genfromtxt(model_params['income_profiles'],delimiter='\t',skip_header=1)
+			self.w=interpolate.interp1d(arr_temp[:,0],arr_temp[:,1],fill_value="extrapolate")(np.arange(1,100))*w_
+			self.w[:self.T_start-1]=0
+			self.w[self.retirement_age:]=0
+			if model_params['income_profiles_standard']==True:
+				self.w=self.w/self.w[self.T_start-1]
+		except:
+			self.w=np.ones(101)*w_
+			self.w[:self.T_start-1]=0
+			self.w[self.retirement_age:]=0
+		
+		
 	def crra_utility(self,c,l):
 		if c<=0:
 			return -9999999
@@ -44,9 +59,19 @@ class model_olg():
 				return np.log(c)-self.kappa*((l**(1+1/self.v))/(1+1/self.v))
 			else:
 				return c**(1-self.sigma)/(1-self.sigma)-self.kappa*((l**(1+1/self.v))/(1+1/self.v))
+			
 	def model_utility(self,c,l):
 		return getattr(self, self.utility_f)(c,l)
-		
+	
+	def universal_after_tax(y):
+		return y
+	
+	def after_linear_tax(y,rate):
+		return y*(1-rate)
+	
+	def after_benabou_tax(y,rate1,rate2):
+		return rate1*y**(1-rate2)
+	
 	def solve_hh(self,grid_params):
 		
 		self.a_min=grid_params['a_min']
@@ -72,18 +97,18 @@ class model_olg():
 				for y in range(self.N_income_levels):
 
 				
-					if t<self.retirement_age:#Working
+					if t<self.retirement_age:#w[t]orking
 						def criter_func(params):
 							c=params[0]
 							l=params[1]
 							V_=0
 							if t<self.T_end:
-								a_=max(self.a_min,min(self.w*self.income_levels[y]*params[1]+self.grid_a[a]*(1+self.r)-params[0],self.a_max))
+								a_=max(self.a_min,min(self.w[t]*self.income_levels[y]*params[1]+self.grid_a[a]*(1+self.r)-params[0],self.a_max))
 								for k in range(self.N_income_levels):
 									V_+=self.beta*self.V_approx[t+1][k](a_)*self.Pi[y,k]
 							return -self.model_utility(c, l)-V_
 					
-						linear_cons=LinearConstraint([[1,0],[0,1],[-1,self.w*self.income_levels[y]]],[0,0,-self.grid_a[a]*(1+self.r)],[np.inf,1,np.inf])
+						linear_cons=LinearConstraint([[1,0],[0,1],[-1,self.w[t]*self.income_levels[y]]],[0,0,-self.grid_a[a]*(1+self.r)],[np.inf,1,np.inf])
 						if t==self.T_end:
 							x0=self.grid_a[a]+0.00001,0.5
 							
@@ -94,9 +119,9 @@ class model_olg():
 						V[a,y]=-res.fun
 						g_c[a,y]=res.x[0]
 						g_l[a,y]=res.x[1]
-						g_a[a,y]=self.w*self.income_levels[y]*res.x[1]+self.grid_a[a]*(1+self.r)-res.x[0]
+						g_a[a,y]=self.w[t]*self.income_levels[y]*res.x[1]+self.grid_a[a]*(1+self.r)-res.x[0]
 					
-					else:#pension and not working
+					else:#pension and not w[t]orking
 						if y==0:
 						
 							def criter_func(params):
@@ -191,16 +216,60 @@ class lifetime_sim():
 			ax2.tick_params(axis='y', labelcolor='red')
 			ax2.legend(loc=0)
 			plt.show()
-		
-		
-params={'kappa':5.24,'beta':0.988,'v':2,'sigma':1.5,'omega':1,'r':0.04,
+
+def model_comparison(models):
+	
+	fig,ax = plt.subplots()
+	ax.set_xlabel('Age')
+	ax.set_ylabel('Value function')
+	for mod in models:
+		ax.plot(np.arange(mod.T_start,mod.T_end+1),np.mean(mod.V,axis=0),label=mod.name)
+	ax.legend()
+	plt.show()	
+	
+	fig,ax = plt.subplots()
+	ax.set_xlabel('Age')
+	ax.set_ylabel('Assets')
+	for mod in models:
+		ax.plot(np.arange(mod.T_start-1,mod.T_end+1),np.mean(mod.a,axis=0),label=mod.name)
+	ax.legend()
+	plt.show()	
+	
+	fig,ax = plt.subplots()
+	ax.set_xlabel('Age')
+	ax.set_ylabel('Consumption')
+	for mod in models:
+		ax.plot(np.arange(mod.T_start,mod.T_end+1),np.mean(mod.c,axis=0),label=mod.name)
+	ax.legend()
+	plt.show()	
+	
+	fig,ax = plt.subplots()
+	ax.set_xlabel('Age')
+	ax.set_ylabel('Labour')
+	for mod in models:
+		ax.plot(np.arange(mod.T_start,mod.T_end+1),np.mean(mod.l,axis=0),label=mod.name)
+	ax.legend()
+	plt.show()	
+	
+	
+params={'name':'Benchmark','kappa':5.24,'beta':0.988,'v':2,'sigma':1.5,'omega':1,'r':0.04,
 		'Pi':np.array([[0.7,0.3],[0.3,0.7]]),'y_levels':np.array([0.8,1.2]),'utility_f':'crra_utility',
 		'T_start':24,'T_end':80,'retirement':True,'retirement_age':65}
+
 grid_params={'a_min':0,'a_max':3,'grid_a_spacing':1.5,'grid_a_size':10}
 
 aa=model_olg(params)
 aa.solve_hh(grid_params)
 n=10000
 initial_prob=[0.5,0.5]
-bb=lifetime_sim(aa,n, initial_prob, 0)
+aa=lifetime_sim(aa,n, initial_prob, 0)
 
+params2={'name':'Benchmark with Income Profiles','kappa':5.24,'beta':0.988,'v':2,'sigma':1.5,'omega':1,'r':0.04,
+		'Pi':np.array([[0.7,0.3],[0.3,0.7]]),'y_levels':np.array([0.8,1.2]),'utility_f':'crra_utility',
+		'T_start':24,'T_end':80,'retirement':True,'retirement_age':65,
+		'income_profiles':'inc_pooled.txt','income_profiles_standard':True}
+bb=model_olg(params2)
+bb.solve_hh(grid_params)
+bb=lifetime_sim(bb,n, initial_prob, 0)
+
+model_comparison([aa, bb])
