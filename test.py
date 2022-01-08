@@ -13,7 +13,7 @@ def my_lin(lb, ub, steps, spacing=1):
 
 
 class model_olg():
-	def __init__(self,model_params,interest=0.04,w_=1):
+	def __init__(self,model_params,retirement_params,taxes_params,interest=0.04,w_=1,l_=0.4):
 		self.name=model_params['name']
 		self.kappa=float(model_params['kappa'])
 		self.beta=float(model_params['beta'])
@@ -28,14 +28,21 @@ class model_olg():
 		
 		self.utility_f=model_params['utility_f']
 		
+	
 		self.T_start=int(model_params['T_start'])
 		self.T_end=int(model_params['T_end'])
 		self.N_periods=self.T_end-self.T_start+1
-		self.retirement=model_params['retirement']
+		
+		self.retirement=retirement_params['retirement']
 		if self.retirement==True:
-			self.retirement_age=int(model_params['retirement_age'])
+			self.retirement_age=int(retirement_params['retirement_age'])
 		else:
 			self.retirement_age=self.T_end
+		self.pension=retirement_params['pension']
+		try:
+			self.replacement_rate=retirement_params['replacement_rate']
+		except:
+			self.replacement_rate=0
 		
 		self.w=np.zeros(101)
 		try:
@@ -49,8 +56,58 @@ class model_olg():
 			self.w=np.ones(101)*w_
 			self.w[:self.T_start-1]=0
 			self.w[self.retirement_age:]=0
+		self.pension_=self.replacement_rate*np.mean(self.w[self.T_start-1:self.retirement_age])*l_
 		
+		self.l_=l_
 		
+		try:
+			self.consumption_tax=taxes_params['consumption']
+		except:
+			self.consumption_tax=False
+		try:
+			self.personal_income_tax=taxes_params['personal income']
+		except:
+			self.personal_income_tax=False
+		try:
+			self.capital_income_tax=taxes_params['capital income']
+		except:
+			self.capital_income_tax=False
+			
+
+	
+	def linear_tax(self,y,rate):
+		return y*(1-rate)
+	
+	def benabou_tax(self,y,rate):
+		y_=y/(np.mean(self.w[self.T_start-1:self.retirement_age])*self.l_)
+		rate1=rate[0]
+		rate2=rate[1]
+		return rate1*y_**(1-rate2)*(np.mean(self.w[self.T_start-1:self.retirement_age])*self.l_)
+	
+	def T_c(self,c):
+		if self.consumption_tax==False:
+			return c
+		else:
+			func_name=list(self.consumption_tax.keys())[0]+'_tax'
+			params_=self.consumption_tax[list(self.consumption_tax.keys())[0]]
+			return getattr(self,func_name)(c,params_)
+	
+	def T_r(self,r):
+		if self.capital_income_tax==False:
+			return r
+		else:
+			func_name=list(self.capital_income_tax.keys())[0]+'_tax'
+			params_=self.capital_income_tax[list(self.capital_income_tax.keys())[0]]
+			return getattr(self,func_name)(r,params_)
+	
+	def T_y(self,y):
+		if self.consumption_tax==False:
+			return y
+		else:
+			func_name=list(self.personal_income_tax.keys())[0]+'_tax'
+			params_=self.personal_income_tax[list(self.personal_income_tax.keys())[0]]
+			return getattr(self,func_name)(y,params_)
+	
 	def crra_utility(self,c,l):
 		if c<=0:
 			return -9999999
@@ -63,17 +120,9 @@ class model_olg():
 	def model_utility(self,c,l):
 		return getattr(self, self.utility_f)(c,l)
 	
-	def universal_after_tax(y):
-		return y
-	
-	def after_linear_tax(y,rate):
-		return y*(1-rate)
-	
-	def after_benabou_tax(y,rate1,rate2):
-		return rate1*y**(1-rate2)
-	
+			
 	def solve_hh(self,grid_params):
-		
+
 		self.a_min=grid_params['a_min']
 		self.a_max=grid_params['a_max']
 		self.grid_a_spacing=grid_params['grid_a_spacing']
@@ -97,7 +146,7 @@ class model_olg():
 				for y in range(self.N_income_levels):
 
 				
-					if t<self.retirement_age:#w[t]orking
+					if t<self.retirement_age:#working
 						def criter_func(params):
 							c=params[0]
 							l=params[1]
@@ -121,38 +170,39 @@ class model_olg():
 						g_l[a,y]=res.x[1]
 						g_a[a,y]=self.w[t]*self.income_levels[y]*res.x[1]+self.grid_a[a]*(1+self.r)-res.x[0]
 					
-					else:#pension and not w[t]orking
+					else:#pension and not working
 						if y==0:
-						
-							def criter_func(params):
-								c=params[0]
-			
-								V_=0
-								if t<self.T_end:
-									a_=max(self.a_min,min(self.grid_a[a]*(1+self.r)-params[0],self.a_max))
-									for k in range(self.N_income_levels):
-										V_+=self.beta*self.V_approx[t+1][k](a_)*self.Pi[y,k]
-								return -self.model_utility(c, 0)-V_
-							ub=self.grid_a[a]*(1+self.r)
-							linear_cons=LinearConstraint([1],[0],[ub])
 							if t==self.T_end:
-								x0=[max(self.grid_a[a],ub/2)]
-								
-							else:
-								x0=[max(g_c[a,y],ub/2)]
-								
-							if self.grid_a[a]<=0:
-								V[a,y]=-99999
-								g_c[a,y]=0
+								g_c[a,y]=self.grid_a[a]*(1+self.r)+self.pension_
 								g_l[a,y]=0
 								g_a[a,y]=0
+								V[a,y]=self.model_utility(self.grid_a[a]*(1+self.r)+self.pension_, 0)
 							else:
-	
-								res = minimize(criter_func, x0, method='trust-constr',constraints=[linear_cons],   options={'verbose': 0})			
-								V[a,y]=-res.fun
-								g_c[a,y]=res.x[0]
-								g_l[a,y]=0
-								g_a[a,y]=self.grid_a[a]*(1+self.r)-res.x[0]
+								def criter_func(params):
+									c=params[0]
+				
+									V_=0
+									if t<self.T_end:
+										a_=max(self.a_min,min(self.grid_a[a]*(1+self.r)+self.pension_-params[0],self.a_max))
+										for k in range(self.N_income_levels):
+											V_+=self.beta*self.V_approx[t+1][k](a_)*self.Pi[y,k]
+									return -self.model_utility(c, 0)-V_
+								ub=self.grid_a[a]*(1+self.r)+self.pension_
+								linear_cons=LinearConstraint([1],[0],[ub])
+								x0=[max(g_c[a,y],ub/2)]
+									
+								if self.grid_a[a]*(1+self.r)+self.pension_<=0:
+									V[a,y]=-99999
+									g_c[a,y]=0
+									g_l[a,y]=0
+									g_a[a,y]=0
+								else:
+		
+									res = minimize(criter_func, x0, method='trust-constr',constraints=[linear_cons],   options={'verbose': 0})			
+									V[a,y]=-res.fun
+									g_c[a,y]=res.x[0]
+									g_l[a,y]=0
+									g_a[a,y]=self.grid_a[a]*(1+self.r)+self.pension_-res.x[0]
 						else:
 							V[a,y]=V[a,0]
 							g_c[a,y]=g_c[a,0]
@@ -252,24 +302,23 @@ def model_comparison(models):
 	plt.show()	
 	
 	
-params={'name':'Benchmark','kappa':5.24,'beta':0.988,'v':2,'sigma':1.5,'omega':1,'r':0.04,
+params={'name':'Model with pension','kappa':5.24,'beta':0.988,'v':2,'sigma':1.5,'omega':1,'r':0.04,
 		'Pi':np.array([[0.7,0.3],[0.3,0.7]]),'y_levels':np.array([0.8,1.2]),'utility_f':'crra_utility',
-		'T_start':24,'T_end':80,'retirement':True,'retirement_age':65}
+		'T_start':24,'T_end':80,'income_profiles':'inc_pooled.txt','income_profiles_standard':True}
 
+retirement_params={'retirement':True,'retirement_age':65,'pension':True,'replacement_rate':0.7}
+retirement_params2={'retirement':True,'retirement_age':65,'pension':True}
+taxes_params={'personal income':{'benabou':[0.8929,0.2035]},'consumption':{'linear':0.19},'capital income':{'linear':0.25}}
 grid_params={'a_min':0,'a_max':3,'grid_a_spacing':1.5,'grid_a_size':10}
 
-aa=model_olg(params)
+aa=model_olg(params,retirement_params,taxes_params)
 aa.solve_hh(grid_params)
 n=10000
 initial_prob=[0.5,0.5]
 aa=lifetime_sim(aa,n, initial_prob, 0)
 
-params2={'name':'Benchmark with Income Profiles','kappa':5.24,'beta':0.988,'v':2,'sigma':1.5,'omega':1,'r':0.04,
-		'Pi':np.array([[0.7,0.3],[0.3,0.7]]),'y_levels':np.array([0.8,1.2]),'utility_f':'crra_utility',
-		'T_start':24,'T_end':80,'retirement':True,'retirement_age':65,
-		'income_profiles':'inc_pooled.txt','income_profiles_standard':True}
-bb=model_olg(params2)
+bb=model_olg({**params,'name':'Model without pension'},retirement_params2,{})
 bb.solve_hh(grid_params)
-bb=lifetime_sim(bb,n, initial_prob, 0)
+bb=lifetime_sim(bb, n, initial_prob, 0)
 
 model_comparison([aa, bb])
